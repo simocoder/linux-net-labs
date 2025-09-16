@@ -21,7 +21,6 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <signal.h>
 
 // Use this to experiment and log various things to help learning. Feel free to
 // add more logs as you see fit.
@@ -45,12 +44,14 @@ static void install_signals(void) {
     sigaction(SIGTERM, &sa, NULL);  // allow `kill -TERM` too
 }
 int main(int argc, char **argv) {
-    int port = (argc > 1) ? atoi(argv[1]) : 8080;
+    int port = (argc > 1) ? atoi(argv[1]) : 8080; // default port
 
-    install_signals();
+    install_signals(); // setup Ctrl-C/TERM handler
 
-    int lfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (lfd < 0) { perror("socket"); return 1; }
+    // opens a TCP endpoint and returns its file descriptor, 
+    // lfd=listen file descriptor
+    int lfd = socket(AF_INET, SOCK_STREAM, 0);  
+    if (lfd < 0) { perror("socket"); return 1; } // create socket
 
     // NOTE: Enables quick rebind after restarts (TIME_WAIT); not multi-bind magic.
     int yes = 1;
@@ -58,39 +59,48 @@ int main(int argc, char **argv) {
         perror("setsockopt"); return 1;
     }
 
+    // bind to the given port on any/all local IPs
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port);
 
+    // bind the socket to the address/port
     if (bind(lfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { 
         perror("bind"); return 1; 
     }
 
+    // start listening for incoming connections (max 128 queued clients)
     if (listen(lfd, 128) < 0) { 
         perror("listen"); return 1; 
     }
 
     fprintf(stderr, "[blocking] listening on :%d (Ctrl-C to stop)\n", port);
 
+    // main loop: accept, echo, close, repeat
     while (!g_stop) {
+        // accept a new client
         struct sockaddr_in cli; socklen_t clilen = sizeof(cli);
 
-        int cfd = accept(lfd, (struct sockaddr*)&cli, &clilen);
-if (cfd < 0) {
-    if (errno == EINTR) {           // interrupted by signal
-        if (g_stop) break;          // exit cleanly
-        continue;                   // else, retry
-    }
-    perror("accept");
-    continue;
-}
+        // accept() blocks until a new client connects. cfd=client file descriptor
+        int cfd = accept(lfd, (struct sockaddr*)&cli, &clilen); 
 
+        // WHY: accept() returns EINTR if interrupted by signal (e.g. Ctrl-C).
+        if (cfd < 0) {
+            if (errno == EINTR) {           // interrupted by signal
+                if (g_stop) break;          // exit cleanly
+                continue;                   // else, retry
+            }
+            perror("accept");
+            continue;
+        }
 
+        // log the new connection
         char ip[64]; inet_ntop(AF_INET, &cli.sin_addr, ip, sizeof(ip));
         fprintf(stderr, "client connected %s:%d\n", ip, ntohs(cli.sin_port));
 
+        // echo loop: read until EOF, echo back what we received
         char buf[4096];
         for (;;) {
             ssize_t n = read(cfd, buf, sizeof(buf));
@@ -100,9 +110,11 @@ if (cfd < 0) {
                 perror("read"); break;
             }
             // PERF: write() may be partial; loop until we've echoed all n bytes.
-            ssize_t off = 0;
+            // TCP is a byte stream; write may write fewer bytes than requested, 
+            // so it loops until all n bytes are sent.
+            ssize_t off = 0;            
             while (off < n) {
-                ssize_t m = write(cfd, buf + off, n - off);
+                ssize_t m = write(cfd, buf + off, n - off); //
                 if (m < 0) { 
                     if (errno == EINTR) continue; 
                     perror("write"); 
