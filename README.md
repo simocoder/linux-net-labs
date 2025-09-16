@@ -2,4 +2,4 @@
 Hands-on labs to build and benchmark high-performance Linux servers.
 
 ## Labs
-1. [Echo I/O Models](01-echo-io-models/) — blocking → select → epoll (LT)
+1. [Echo I/O Models](01-echo-io-models/) — blocking → select → epoll (LT) [Blog Post](https://www.rebelyaml.com/posts/linux-net-labs-01-echo-io-models-blocking/)
